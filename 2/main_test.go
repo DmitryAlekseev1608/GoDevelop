@@ -28,6 +28,7 @@ func TestPipeline(t *testing.T) {
 	var recieved uint32
 	freeFlowJobs := []job{
 		job(func(in, out chan interface{}) {
+
 			out <- 1
 			time.Sleep(10 * time.Millisecond)
 			currRecieved := atomic.LoadUint32(&recieved)

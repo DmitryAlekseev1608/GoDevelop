@@ -11,17 +11,39 @@ import (
 	"text/template"
 )
 
+type tpl struct {
+	FieldName string
+}
+
 
 var (
 	intTpl = template.Must(template.New("intTpl").Parse(`
-	// {{.FieldName}}
-	type {{.FieldName}} struct{}
-	func (h *{{.FieldName}}) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/user/profile":
-			fmt.Println("-----------")
-		}
-	}
+// {{.FieldName}}
+func (h *{{.FieldName}}) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// var auth = r.Header.Get("X-Auth")
+	// if auth != "100500" {
+	// 	http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
+	// 	return
+	// }
+switch r.URL.Path {
+	case "/user/profile":
+		var result = resp{
+				"id":        42,
+				"login":     "rvasily",
+				"full_name": "Vasily Romanov",
+				"status":    20,
+			}
+		w.WriteHeader(http.StatusOK)
+		w.Header().Set("Content-Type", "application/json")
+		jsonResp, _ := json.Marshal(result)
+		w.Write(jsonResp)
+		return
+
+}
+
+// func (h *{{.FieldName}}) wrapperDoSomeJob() {
+// 	res, err := h.DoSomeJob(ctx, params)
+}
 `))
 )
 
@@ -36,12 +58,17 @@ func main() {
 	out, _ := os.Create(os.Args[2])
 
 	fmt.Fprintln(out, `package `+node.Name.Name)
-	fmt.Fprintln(out) // empty line
-	fmt.Fprintln(out, `import "encoding/binary"`)
-	fmt.Fprintln(out, `import "bytes"`)
-	fmt.Fprintln(out) // empty line
+	fmt.Fprintln(out, 
+	`
+	import (
+		"net/http"
+		"encoding/json"
 
-	methodname := make([]ast.Expr, 0)
+	)`)
+
+	fmt.Fprintln(out, `type resp map[string]interface{}`)
+
+	methodName := make(map[string]struct{})
 	for _, f := range node.Decls {
 		g, ok := f.(*ast.FuncDecl)
 		if !ok {
@@ -64,7 +91,16 @@ func main() {
 				fmt.Printf("SKIP method %#v doesnt have cgen mark\n", g.Name)
 				continue
 			}
-		methodname = append(methodname, g.Recv.List[0].Type)
+		if starExpr, ok := g.Recv.List[0].Type.(*ast.StarExpr); ok {
+			if ident, ok := starExpr.X.(*ast.Ident); ok {
+				methodName[ident.Name] = struct{}{}
+			}
+		}
 	}
-	fmt.Println(methodname)
+
+	// fmt.Printf("type: %T data: %+v\n", methodName[0], methodName[0])
+
+	for fieldName, _ := range methodName {
+		intTpl.Execute(out, tpl{fieldName})
+	}
 }

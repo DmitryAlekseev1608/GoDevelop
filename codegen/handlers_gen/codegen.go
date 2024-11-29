@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"go/ast"
 	"go/parser"
@@ -8,41 +9,30 @@ import (
 	"log"
 	"os"
 	"strings"
+	"regexp"
 	"text/template"
 )
 
-type tpl struct {
-	FieldName string
-}
+type parsingResult map[string][]method
 
+type method map[string]methodURLPath
+
+type methodURLPath struct {
+	URL string `json:"url"`
+	Auth bool `json:"auth"`
+	Method string `json:"method"`
+}
 
 var (
-	intTpl = template.Must(template.New("intTpl").Parse(`
-// {{.FieldName}}
-func (h *{{.FieldName}}) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	// var auth = r.Header.Get("X-Auth")
-	// if auth != "100500" {
-	// 	http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
-	// 	return
-	// }
-switch r.URL.Path {
-	case "/user/profile":
-		var result = resp{
-				"id":        42,
-				"login":     "rvasily",
-				"full_name": "Vasily Romanov",
-				"status":    20,
-			}
-		w.WriteHeader(http.StatusOK)
-		w.Header().Set("Content-Type", "application/json")
-		jsonResp, _ := json.Marshal(result)
-		w.Write(jsonResp)
-		return
-
-}
-
-// func (h *{{.FieldName}}) wrapperDoSomeJob() {
-// 	res, err := h.DoSomeJob(ctx, params)
+	serveHTTPHeaderTpl = template.Must(template.New("serveHTTPHeaderTpl").Parse(`
+func (h *{{.StructName}}) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+switch r.URL.Path {`))
+	serveHTTPBodyTpl = template.Must(template.New("serveHTTPBodyTpl").Parse(`
+	case "{{.URLPath}}":
+		h.handler{{.MethodName}}(w, r)`))
+	handlerTpl = template.Must(template.New("handlerTpl").Parse(`
+func (h *{{.StructName}}) handler{{.MethodName}} (w http.ResponseWriter, r *http.Request) {
+	res, err := h.{{.MethodName}}(ctx, params)
 }
 `))
 )
@@ -60,16 +50,15 @@ func main() {
 	fmt.Fprintln(out, `package `+node.Name.Name)
 	fmt.Fprintln(out, 
 	`
-	import (
-		"net/http"
-		"encoding/json"
-
+import (
+	"net/http"
 	)`)
-
+	fmt.Fprintln(out)
 	fmt.Fprintln(out, `type resp map[string]interface{}`)
 
-	methodName := make(map[string]struct{})
+	parsingResult := parsingResult{}
 	for _, f := range node.Decls {
+		method := method{}
 		g, ok := f.(*ast.FuncDecl)
 		if !ok {
 			fmt.Printf("SKIP %#T is not *ast.FuncDecl\n", f)
@@ -86,21 +75,55 @@ func main() {
 		needCodegen := false
 		for _, comment := range g.Doc.List {
 				needCodegen = needCodegen || strings.HasPrefix(comment.Text, "// apigen:api")
+				if needCodegen {
+					re := regexp.MustCompile(`\{.*\}`)
+					var parsingMethod methodURLPath
+					err := json.Unmarshal([]byte(re.FindString(comment.Text)), &parsingMethod)
+					if err != nil {
+						log.Fatal(err)
+					}
+					method[f.(*ast.FuncDecl).Name.Name] = parsingMethod
+					break
+					// fmt.Printf("type: %T data: %+v\n", parsingMethod, parsingMethod)
+				}
 			}
 			if !needCodegen {
-				fmt.Printf("SKIP method %#v doesnt have cgen mark\n", g.Name)
+				fmt.Printf("SKIP method %#v doesnt have apigen mark\n", g.Name)
 				continue
 			}
 		if starExpr, ok := g.Recv.List[0].Type.(*ast.StarExpr); ok {
 			if ident, ok := starExpr.X.(*ast.Ident); ok {
-				methodName[ident.Name] = struct{}{}
+				parsingResult[ident.Name] = append(parsingResult[ident.Name], method)
 			}
 		}
+		fmt.Printf("type: %T data: %+v\n", parsingResult, parsingResult)
 	}
 
-	// fmt.Printf("type: %T data: %+v\n", methodName[0], methodName[0])
-
-	for fieldName, _ := range methodName {
-		intTpl.Execute(out, tpl{fieldName})
+	for str, paramStr := range parsingResult {
+		dataPostTpl := map[string] interface{} {
+			"StructName":   str,
+		}
+		serveHTTPHeaderTpl.Execute(out, dataPostTpl)
+		for _, paramMet := range paramStr {
+			for function, param := range paramMet {
+				dataPostTpl := map[string] interface{} {
+					"URLPath":   param.URL,
+					"MethodName": function,
+				}
+				serveHTTPBodyTpl.Execute(out, dataPostTpl)
+			}
+		}
+		fmt.Fprintln(out, `
+			}`)
+		fmt.Fprintln(out, `}`)
+		for _, paramMet := range paramStr {
+			for function, _ := range paramMet {
+				dataPostTpl := map[string] interface{} {
+					"StructName":   str,
+					"MethodName": function,
+				}
+				handlerTpl.Execute(out, dataPostTpl)
+			}
+		}
 	}
 }

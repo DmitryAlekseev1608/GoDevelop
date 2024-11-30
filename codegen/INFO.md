@@ -31,7 +31,6 @@ func (h *{{.FieldName}}) wrapperDoSomeJob() {
 		},
 	}
 w.WriteHeader(http.StatusOK)
-w.Header().Set("Content-Type", "application/json")
 jsonResp, _ := json.Marshal(result)
 w.Write(jsonResp)
 }

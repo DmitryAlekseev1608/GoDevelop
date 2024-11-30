@@ -21,7 +21,20 @@ type methodURLPath struct {
 	URL string `json:"url"`
 	Auth bool `json:"auth"`
 	Method string `json:"method"`
+	Attributes string `json:"attribute"`
 }
+
+type validParam map[string]valid 
+
+type valid struct {
+	Required bool
+	Paramname string
+	Enum []string
+	Default interface{}
+	Min interface{}
+	Max interface{}
+}
+
 
 var (
 	serveHTTPHeaderTpl = template.Must(template.New("serveHTTPHeaderTpl").Parse(`
@@ -32,7 +45,35 @@ switch r.URL.Path {`))
 		h.handler{{.MethodName}}(w, r)`))
 	handlerTpl = template.Must(template.New("handlerTpl").Parse(`
 func (h *{{.StructName}}) handler{{.MethodName}} (w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	params := {{.AtrebutesName}}{}
+	decoder := schema.NewDecoder()
+	decoder.IgnoreUnknownKeys(true)
+	err := decoder.Decode(params, r.URL.Query())
+	if err != nil {
+		fmt.Println(err)
+		http.Error(w, "internal", 500)
+		return
+	}
+	_, err = govalidator.ValidateStruct(params)
+	if err != nil {
+		if allErrs, ok := err.(govalidator.Errors); ok {
+			for _, fld := range allErrs.Errors() {
+				data := []byte(fmt.Sprintf("field: %#v\n\n", fld))
+				w.Write(data)
+			}
+		}
+	}
 	res, err := h.{{.MethodName}}(ctx, params)
+	if err != nil {
+		fmt.Println(err)
+		http.Error(w, "internal", 500)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+	jsonResp, _ := json.Marshal(res)
+	w.Write(jsonResp)
+	return
 }
 `))
 )
@@ -52,11 +93,16 @@ func main() {
 	`
 import (
 	"net/http"
+	"encoding/json"
+	"github.com/asaskevich/govalidator"
+	"github.com/gorilla/schema"
+	"fmt"
 	)`)
 	fmt.Fprintln(out)
 	fmt.Fprintln(out, `type resp map[string]interface{}`)
 
 	parsingResult := parsingResult{}
+	needStruct := make([]string, 0)
 	for _, f := range node.Decls {
 		method := method{}
 		g, ok := f.(*ast.FuncDecl)
@@ -82,21 +128,25 @@ import (
 					if err != nil {
 						log.Fatal(err)
 					}
+					if secondAttributeName, ok := g.Type.Params.List[1].Type.(*ast.Ident); ok {
+						parsingMethod.Attributes = secondAttributeName.Name
+						needStruct = append(needStruct, secondAttributeName.Name)
+					}
 					method[f.(*ast.FuncDecl).Name.Name] = parsingMethod
 					break
-					// fmt.Printf("type: %T data: %+v\n", parsingMethod, parsingMethod)
 				}
 			}
 			if !needCodegen {
 				fmt.Printf("SKIP method %#v doesnt have apigen mark\n", g.Name)
 				continue
 			}
+
 		if starExpr, ok := g.Recv.List[0].Type.(*ast.StarExpr); ok {
 			if ident, ok := starExpr.X.(*ast.Ident); ok {
 				parsingResult[ident.Name] = append(parsingResult[ident.Name], method)
 			}
 		}
-		fmt.Printf("type: %T data: %+v\n", parsingResult, parsingResult)
+		// fmt.Printf("type: %T data: %+v\n", parsingResult, parsingResult)
 	}
 
 	for str, paramStr := range parsingResult {
@@ -117,13 +167,57 @@ import (
 			}`)
 		fmt.Fprintln(out, `}`)
 		for _, paramMet := range paramStr {
-			for function, _ := range paramMet {
+			for function, paramFunc := range paramMet {
 				dataPostTpl := map[string] interface{} {
 					"StructName":   str,
 					"MethodName": function,
+					"AtrebutesName": paramFunc.Attributes,
 				}
 				handlerTpl.Execute(out, dataPostTpl)
 			}
 		}
 	}
+
+
+	validParam := make(validParam)
+	for _, f := range node.Decls {
+		g, ok := f.(*ast.GenDecl)
+		if !ok {
+			fmt.Printf("SKIP %#T is not *ast.GenDecl\n", f)
+			continue
+		}
+		for _, spec := range g.Specs {
+			currType, ok := spec.(*ast.TypeSpec)
+			if !ok {
+				fmt.Printf("SKIP %#T is not ast.TypeSpec\n", spec)
+				continue
+			}
+			if contains(needStruct, currType.Name.Name) {
+				if currStruct, ok := currType.Type.(*ast.StructType); ok {
+					valid := valid{
+						Required: strings.Contains(currStruct.Fields.List[0].Tag.Value, "required"),
+						Paramname: string,
+						Enum: []string,
+						Default: interface{},
+						Min: interface{},
+						Max: interface{},
+					}
+					validParam[currStruct.Fields.List[0].Names[0].Name] = valid
+					// fmt.Printf("type: %T data: %+v\n", currStruct.Fields.List[0].Names[0].Name, currStruct.Fields.List[0].Names[0].Name)
+					// fmt.Printf("type: %T data: %+v\n", currStruct.Fields.List[0].Tag.Kind, currStruct.Fields.List[0].Tag.Kind)
+					// fmt.Printf("type: %T data: %+v\n", currStruct.Fields.List[0].Tag.Value, currStruct.Fields.List[0].Tag.Value)
+				}
+			}
+		}
+	}
+
+}
+
+func contains(slice []string, value string) bool {
+    for _, v := range slice {
+        if v == value {
+            return true
+        }
+    }
+    return false
 }

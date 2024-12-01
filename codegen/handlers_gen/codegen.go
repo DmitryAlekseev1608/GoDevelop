@@ -24,6 +24,7 @@ type methodURLPath struct {
 	Attributes string `json:"attribute"`
 }
 
+type structName map[string]validParam
 type validParam map[string]valid 
 
 type valid struct {
@@ -33,6 +34,7 @@ type valid struct {
 	Default interface{}
 	Min interface{}
 	Max interface{}
+	Type string
 }
 
 
@@ -76,6 +78,10 @@ func (h *{{.StructName}}) handler{{.MethodName}} (w http.ResponseWriter, r *http
 	return
 }
 `))
+	typeValidHeaderTpl = template.Must(template.New("typeValidHeaderTpl").Parse(`
+type {{.StructName}}Valid struct {`))
+	typeValidAttrTpl = template.Must(template.New("typeValidAttrTpl").Parse(`
+{{.AtrebutesName}} {{.KindType}}`))
 )
 
 
@@ -149,6 +155,82 @@ import (
 		// fmt.Printf("type: %T data: %+v\n", parsingResult, parsingResult)
 	}
 
+	structName := make(structName)
+	for _, f := range node.Decls {
+		g, ok := f.(*ast.GenDecl)
+		if !ok {
+			fmt.Printf("SKIP %#T is not *ast.GenDecl\n", f)
+			continue
+		}
+		for _, spec := range g.Specs {
+			currType, ok := spec.(*ast.TypeSpec)
+			if !ok {
+				fmt.Printf("SKIP %#T is not ast.TypeSpec\n", spec)
+				continue
+			}
+			validParam := make(validParam)
+			if contains(needStruct, currType.Name.Name) {
+				if currStruct, ok := currType.Type.(*ast.StructType); ok {
+					for _, tag := range currStruct.Fields.List {
+						valid := valid{
+							Required: strings.Contains(tag.Tag.Value, "required"),
+							Paramname: takeParamName(tag.Tag.Value),
+							Enum: takeEnum(tag.Tag.Value),
+							Default: takeDefault(tag.Tag.Value),
+							Min: takeMin(tag.Tag.Value),
+							Max: takeMax(tag.Tag.Value),
+							Type: tag.Tag.Kind.String(),
+						}
+						validParam[tag.Names[0].Name] = valid
+						structName[currType.Name.Name] = validParam
+					}
+				}
+			}
+		}
+	}
+
+	for key, value := range structName {
+		dataPostTpl := map[string] interface{} {
+			"StructName":   key,
+		}
+		typeValidHeaderTpl.Execute(out, dataPostTpl)
+		for keyStr, valueStr := range value {
+			fmt.Println(out, keyStr + " " + valueStr.Type + "`valid:")
+			if valueStr.Required {
+				fmt.Println(out, "required:\"true\",")
+			}
+			if valueStr.Paramname != "" {
+				fmt.Println(out, fmt.Sprintf("to:\"%s\",", valueStr.Paramname))
+			} else {
+				fmt.Println(out, fmt.Sprintf("to:\"%s\",", strings.ToLower(keyStr)))
+			}
+			if len(valueStr.Enum) != 0 {
+				for i, chooseValue := range valueStr.Enum {
+					if i == 0 {
+						fmt.Println(out, fmt.Sprintf("in(%s", chooseValue))
+					}
+					if i != 0 && i != len(valueStr.Enum)-1 {
+						fmt.Println(out, fmt.Sprintf("|%s", chooseValue))
+					}
+					if i == len(valueStr.Enum)-1 {
+						fmt.Println(out, fmt.Sprintf("%s)", chooseValue))
+					}
+				}
+			}
+			if valueStr.Default != "" {
+				fmt.Println(out, "default:" + valueStr.Default + ",")
+			}
+			if valueStr.Min != "" {
+				fmt.Println(out, "min:" + valueStr.Min + ",")
+			}
+			if valueStr.Max != "" {
+				fmt.Println(out, "min:" + valueStr.Max + ",")
+			}
+			fmt.Println(out, "`")
+			}
+		}
+
+
 	for str, paramStr := range parsingResult {
 		dataPostTpl := map[string] interface{} {
 			"StructName":   str,
@@ -177,42 +259,7 @@ import (
 			}
 		}
 	}
-
-
-	validParam := make(validParam)
-	for _, f := range node.Decls {
-		g, ok := f.(*ast.GenDecl)
-		if !ok {
-			fmt.Printf("SKIP %#T is not *ast.GenDecl\n", f)
-			continue
-		}
-		for _, spec := range g.Specs {
-			currType, ok := spec.(*ast.TypeSpec)
-			if !ok {
-				fmt.Printf("SKIP %#T is not ast.TypeSpec\n", spec)
-				continue
-			}
-			if contains(needStruct, currType.Name.Name) {
-				if currStruct, ok := currType.Type.(*ast.StructType); ok {
-					for _, tag := range currStruct.Fields.List {
-						valid := valid{
-							Required: strings.Contains(tag.Tag.Value, "required"),
-							Paramname: takeParamName(tag.Tag.Value),
-							Enum: takeEnum(tag.Tag.Value),
-							Default: takeDefault(tag.Tag.Value),
-							Min: takeMin(tag.Tag.Value),
-							Max: takeMax(tag.Tag.Value),
-						}
-						validParam[tag.Names[0].Name] = valid
-						// fmt.Printf("type: %T data: %+v\n", currStruct.Fields.List[0].Names[0].Name, currStruct.Fields.List[0].Names[0].Name)
-						// fmt.Printf("type: %T data: %+v\n", currStruct.Fields.List[0].Tag.Kind, currStruct.Fields.List[0].Tag.Kind)
-						// fmt.Printf("type: %T data: %+v\n", currStruct.Fields.List[0].Tag.Value, currStruct.Fields.List[0].Tag.Value)
-					}
-				}
-			}
-		}
-	}
-	fmt.Printf("type: %T data: %+v\n", validParam, validParam)
+	fmt.Printf("type: %T data: %+v\n", structName, structName)
 }
 
 func contains(slice []string, value string) bool {
@@ -236,7 +283,7 @@ func takeParamName (tag string) string {
 }
 
 func takeEnum (tag string) []string {
-	pattern := `enum=([a-zA-Z_]+)`
+	pattern := `enum=([a-zA-Z_|]+)`
 	re := regexp.MustCompile(pattern)
 	match := re.FindStringSubmatch(tag)
 	if len(match) > 0 {

@@ -194,23 +194,25 @@ import (
 			}
 			if contains(needStruct, currType.Name.Name) {
 				if currStruct, ok := currType.Type.(*ast.StructType); ok {
-					valid := valid{
-						Required: strings.Contains(currStruct.Fields.List[0].Tag.Value, "required"),
-						Paramname: string,
-						Enum: []string,
-						Default: interface{},
-						Min: interface{},
-						Max: interface{},
+					for _, tag := range currStruct.Fields.List {
+						valid := valid{
+							Required: strings.Contains(tag.Tag.Value, "required"),
+							Paramname: takeParamName(tag.Tag.Value),
+							Enum: takeEnum(tag.Tag.Value),
+							Default: takeDefault(tag.Tag.Value),
+							Min: takeMin(tag.Tag.Value),
+							Max: takeMax(tag.Tag.Value),
+						}
+						validParam[tag.Names[0].Name] = valid
+						// fmt.Printf("type: %T data: %+v\n", currStruct.Fields.List[0].Names[0].Name, currStruct.Fields.List[0].Names[0].Name)
+						// fmt.Printf("type: %T data: %+v\n", currStruct.Fields.List[0].Tag.Kind, currStruct.Fields.List[0].Tag.Kind)
+						// fmt.Printf("type: %T data: %+v\n", currStruct.Fields.List[0].Tag.Value, currStruct.Fields.List[0].Tag.Value)
 					}
-					validParam[currStruct.Fields.List[0].Names[0].Name] = valid
-					// fmt.Printf("type: %T data: %+v\n", currStruct.Fields.List[0].Names[0].Name, currStruct.Fields.List[0].Names[0].Name)
-					// fmt.Printf("type: %T data: %+v\n", currStruct.Fields.List[0].Tag.Kind, currStruct.Fields.List[0].Tag.Kind)
-					// fmt.Printf("type: %T data: %+v\n", currStruct.Fields.List[0].Tag.Value, currStruct.Fields.List[0].Tag.Value)
 				}
 			}
 		}
 	}
-
+	fmt.Printf("type: %T data: %+v\n", validParam, validParam)
 }
 
 func contains(slice []string, value string) bool {
@@ -220,4 +222,59 @@ func contains(slice []string, value string) bool {
         }
     }
     return false
+}
+
+func takeParamName (tag string) string {
+	pattern := `paramname=([a-zA-Z_]+)`
+	re := regexp.MustCompile(pattern)
+	match := re.FindStringSubmatch(tag)
+	if len(match) > 0 {
+		return match[1]
+	} else {
+		return ""
+	}
+}
+
+func takeEnum (tag string) []string {
+	pattern := `enum=([a-zA-Z_]+)`
+	re := regexp.MustCompile(pattern)
+	match := re.FindStringSubmatch(tag)
+	if len(match) > 0 {
+		return strings.Split(match[1], "|")
+	} else {
+		return nil
+	}
+}
+
+func takeDefault (tag string) string {
+	pattern := `default=([a-zA-Z_]+)`
+	re := regexp.MustCompile(pattern)
+	match := re.FindStringSubmatch(tag)
+	if len(match) > 0 {
+		return match[1]
+	} else {
+		return ""
+	}
+}
+
+func takeMin (tag string) string {
+	pattern := `min=([0-9]+)`
+	re := regexp.MustCompile(pattern)
+	match := re.FindStringSubmatch(tag)
+	if len(match) > 0 {
+		return match[1]
+	} else {
+		return ""
+	}
+}
+
+func takeMax (tag string) string {
+	pattern := `max=([0-9]+)`
+	re := regexp.MustCompile(pattern)
+	match := re.FindStringSubmatch(tag)
+	if len(match) > 0 {
+		return match[1]
+	} else {
+		return ""
+	}
 }

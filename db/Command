@@ -1,0 +1,8 @@
+docker ps
+mysql -u root -p golang
+docker exec -it 5abb1c485ddc bash
+USE goland;
+docker exec d518d2fbc9ea  mysql -u root -p 1234 golang < sample_db.sql
+mysql -u root -p 1234 golang < sample_db.sql
+mysql> source sample_db.sql;
+docker cp foo.txt container_id:/foo.txt

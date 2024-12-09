@@ -5,24 +5,26 @@ import (
 	"net"
 	"log"
 	"google.golang.org/grpc"
-	"fmt"
 )
 
 func StartMyMicroservice(ctx context.Context, listenAddr string, ACLData string) (err error) {
 	lis, err := net.Listen("tcp", ":8081")
 	if err != nil {
-		log.Fatalln("cant listet port", err)
+		log.Fatalln("can't listet port", err)
 	}
 	server := grpc.NewServer()
 	RegisterAdminServer(server, NewAdmin())
 	RegisterBizServer(server, NewBiz())
-	server.Serve(lis)
+	go func() {
+		defer server.GracefulStop()
+		go server.Serve(lis)
+		<- ctx.Done()
+		}()
+	return
 }
-
 
 type admin struct {
 }
-
 
 func NewAdmin() *admin {
 	return &admin{
@@ -51,9 +53,17 @@ func (a *admin) mustEmbedUnimplementedAdminServer() {
 func (b *biz) Logging() {
 }
 
-func (b *biz) Add(context.Context, *Nothing) (*Nothing, error) {
+func (b *biz) Add(context.Context, *Nothing) (anyThing *Nothing, err error) {
 	return
 }
 
-func (b *biz) Test() {
+func (b *biz) Test(context.Context, *Nothing) (anyThing *Nothing, err error) {
+	return
+}
+
+func (b *biz) Check(context.Context, *Nothing) (anyThing *Nothing, err error) {
+	return
+}
+
+func (b *biz) mustEmbedUnimplementedBizServer() {
 }

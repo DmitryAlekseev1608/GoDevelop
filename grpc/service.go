@@ -9,6 +9,7 @@ import (
 	"google.golang.org/grpc/status"
 	"strings"
 	"encoding/json"
+	"google.golang.org/grpc/codes"
 )
 
 func StartMyMicroservice(ctx context.Context, listenAddr string, ACLData string) (err error) {
@@ -90,9 +91,12 @@ func authInterceptor(
 	if !ok {
 		return nil, status.Errorf(16, "NOT_FOUND")
 	}
-	currentNameOfUser := metadataOfUser["consumer"][0]
+	currentNameOfUser, exist := getCurrentNameOfUser(metadataOfUser)
+	if !exist {
+		return nil, status.Errorf(codes.Unauthenticated, "authentication failed")
+	}
 	accesses := info.Server.(*biz).accesses
-	if cannotProceed(currentNameOfUser, accesses) {
+	if cannotProceed(*currentNameOfUser, accesses) {
 		return nil, status.Errorf(7, "PERMISSION_DENIED")
 	}
 	return handler(ctx, req)
@@ -101,6 +105,16 @@ func authInterceptor(
 func cannotProceed(currentNameOfUser string, accesses map[string][]string) bool {
 	_, exist := accesses[currentNameOfUser]
 	return exist
+}
+
+func getCurrentNameOfUser(metadataOfUser metadata.MD) (currentNameOfUser *string, exist bool) {
+	_, exist = metadataOfUser["consumer"]
+	if !exist {
+		currentNameOfUser = nil
+	} else {
+		currentNameOfUser = &metadataOfUser["consumer"][0]
+	}
+	return
 }
 
 func createMapFromACLData(ACLData string) (accesses map[string][]string, err error) {

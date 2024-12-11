@@ -10,6 +10,7 @@ import (
 	"strings"
 	"encoding/json"
 	"google.golang.org/grpc/codes"
+	"fmt"
 )
 
 func StartMyMicroservice(ctx context.Context, listenAddr string, ACLData string) (err error) {
@@ -22,8 +23,9 @@ func StartMyMicroservice(ctx context.Context, listenAddr string, ACLData string)
 		}
 		server := grpc.NewServer(
 			grpc.UnaryInterceptor(authInterceptor),
+			grpc.StreamInterceptor(streamInterceptor),
 		)
-		RegisterAdminServer(server, NewAdmin())
+		RegisterAdminServer(server, NewAdmin(accesses))
 		RegisterBizServer(server, NewBiz(accesses))
 		go func() {
 			defer server.GracefulStop()
@@ -35,10 +37,12 @@ func StartMyMicroservice(ctx context.Context, listenAddr string, ACLData string)
 }
 
 type admin struct {
+	accesses map[string][]string
 }
 
-func NewAdmin() *admin {
+func NewAdmin(accesses map[string][]string) *admin {
 	return &admin{
+		accesses: accesses,
 	}
 }
 
@@ -52,7 +56,9 @@ func NewBiz(accesses map[string][]string) *biz {
 	}
 }
 
-func (a *admin) Logging(*Nothing, Admin_LoggingServer) (err error) {
+func (a *admin) Logging(in *Nothing, adminServer Admin_LoggingServer) (err error) {
+	out := &Event{}
+	err = adminServer.Send(out)
 	return
 }
 
@@ -66,15 +72,17 @@ func (a *admin) mustEmbedUnimplementedAdminServer() {
 func (b *biz) Logging() {
 }
 
-func (b *biz) Add(context.Context, *Nothing) (anyThing *Nothing, err error) {
+func (b *biz) Add(context.Context, *Nothing) (out *Nothing, err error) {
 	return
 }
 
 func (b *biz) Test(ctx context.Context, in *Nothing) (out *Nothing, err error) {
-	return
+	out = &Nothing{}
+	return 
 }
 
-func (b *biz) Check(context.Context, *Nothing) (anyThing *Nothing, err error) {
+func (b *biz) Check(ctx context.Context, in *Nothing) (out *Nothing, err error) {
+	out = &Nothing{}
 	return
 }
 
@@ -95,16 +103,67 @@ func authInterceptor(
 	if !exist {
 		return nil, status.Errorf(codes.Unauthenticated, "authentication failed")
 	}
-	accesses := info.Server.(*biz).accesses
-	if cannotProceed(*currentNameOfUser, accesses) {
-		return nil, status.Errorf(7, "PERMISSION_DENIED")
+	methodWhichCall, exist := getMethodWhichCall(ctx)
+	if !exist {
+		return nil, status.Errorf(codes.Unauthenticated, "method is out in call")
+	}
+	accesses := make(map[string][]string)
+	switch  info.Server.(type) {
+		case (*biz):
+			accesses = info.Server.(*biz).accesses
+		case (*admin):
+			accesses = info.Server.(*admin).accesses
+	}
+	if cannotProceed(*currentNameOfUser, methodWhichCall, accesses) {
+		return nil, status.Errorf(codes.Unauthenticated, "authentication failed")
 	}
 	return handler(ctx, req)
 }
 
-func cannotProceed(currentNameOfUser string, accesses map[string][]string) bool {
-	_, exist := accesses[currentNameOfUser]
-	return exist
+func streamInterceptor(
+	srv interface{},
+	ss grpc.ServerStream,
+	info *grpc.StreamServerInfo,
+	handler grpc.StreamHandler,
+) error {
+	metadataOfUser, ok := metadata.FromIncomingContext(ss.Context())
+	if !ok {
+		return status.Errorf(16, "NOT_FOUND")
+	}
+	currentNameOfUser, exist := getCurrentNameOfUser(metadataOfUser)
+	if !exist {
+		return status.Errorf(codes.Unauthenticated, "authentication failed")
+	}
+	methodWhichCall, exist := getMethodWhichCall(ss.Context())
+	if !exist {
+		return status.Errorf(codes.Unauthenticated, "method is out in call")
+	}
+	accesses := make(map[string][]string)
+	switch  srv.(type) {
+		case (*biz):
+			accesses = srv.(*biz).accesses
+		case (*admin):
+			accesses = srv.(*admin).accesses
+	}
+	if cannotProceed(*currentNameOfUser, methodWhichCall, accesses) {
+		return status.Errorf(codes.Unauthenticated, "authentication failed")
+	}
+	return err
+}
+
+func cannotProceed(currentNameOfUser string, methodWhichCall string, accesses map[string][]string) bool {
+	methodAcceptable, exist := accesses[currentNameOfUser]
+	if exist {
+		for _, val := range methodAcceptable {
+			if val == methodWhichCall || (val[len(val)-1] == byte('*') && strings.Contains(methodWhichCall, val[:len(val)-2])) {
+				test := val[:len(val)-2]
+				fmt.Println(test)
+				return !exist
+			}
+		}
+		exist = false
+	}
+	return !exist
 }
 
 func getCurrentNameOfUser(metadataOfUser metadata.MD) (currentNameOfUser *string, exist bool) {
@@ -123,5 +182,10 @@ func createMapFromACLData(ACLData string) (accesses map[string][]string, err err
 	if err != nil {
 		log.Printf("Ошибка при парсинге ACLData: %v", err)
 	}
+	return
+}
+
+func getMethodWhichCall(ctx context.Context) (methodWhichCall string, exist bool) {
+	methodWhichCall, exist = grpc.Method(ctx)
 	return
 }

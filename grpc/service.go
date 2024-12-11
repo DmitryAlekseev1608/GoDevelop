@@ -10,7 +10,6 @@ import (
 	"strings"
 	"encoding/json"
 	"google.golang.org/grpc/codes"
-	"fmt"
 )
 
 func StartMyMicroservice(ctx context.Context, listenAddr string, ACLData string) (err error) {
@@ -25,8 +24,8 @@ func StartMyMicroservice(ctx context.Context, listenAddr string, ACLData string)
 			grpc.UnaryInterceptor(authInterceptor),
 			grpc.StreamInterceptor(streamInterceptor),
 		)
-		RegisterAdminServer(server, NewAdmin(accesses))
-		RegisterBizServer(server, NewBiz(accesses))
+		RegisterAdminServer(server, NewAdmin(accesses, listenAddr))
+		RegisterBizServer(server, NewBiz(accesses, listenAddr))
 		go func() {
 			defer server.GracefulStop()
 			go server.Serve(lis)
@@ -37,27 +36,33 @@ func StartMyMicroservice(ctx context.Context, listenAddr string, ACLData string)
 }
 
 type admin struct {
+	log []Event
+	host string
 	accesses map[string][]string
 }
 
-func NewAdmin(accesses map[string][]string) *admin {
+func NewAdmin(accesses map[string][]string, host string) *admin {
 	return &admin{
+		log: []Event{},
+		host: host,
 		accesses: accesses,
 	}
 }
 
 type biz struct {
+	host string
 	accesses map[string][]string
 }
 
-func NewBiz(accesses map[string][]string) *biz {
+func NewBiz(accesses map[string][]string, host string) *biz {
 	return &biz{
+		host: host,
 		accesses: accesses,
 	}
 }
 
 func (a *admin) Logging(in *Nothing, adminServer Admin_LoggingServer) (err error) {
-	out := &Event{}
+	out := &Event{Consumer: "logger2", Method: "/main.Admin/Logging", Host: strings.Split(a.host, ":")[0] + ":"}
 	err = adminServer.Send(out)
 	return
 }
@@ -113,6 +118,12 @@ func authInterceptor(
 			accesses = info.Server.(*biz).accesses
 		case (*admin):
 			accesses = info.Server.(*admin).accesses
+			// currentEvent := Event{
+			// 	Consumer: "logger2", 
+			// 	Method: "/main.Admin/Logging",
+			// 	Host: strings.Split(info.Server.(*admin).host, ":")[0] + ":",
+			// }
+			// info.Server.(*admin).log = append(info.Server.(*admin).log, currentEvent)
 	}
 	if cannotProceed(*currentNameOfUser, methodWhichCall, accesses) {
 		return nil, status.Errorf(codes.Unauthenticated, "authentication failed")
@@ -138,17 +149,11 @@ func streamInterceptor(
 	if !exist {
 		return status.Errorf(codes.Unauthenticated, "method is out in call")
 	}
-	accesses := make(map[string][]string)
-	switch  srv.(type) {
-		case (*biz):
-			accesses = srv.(*biz).accesses
-		case (*admin):
-			accesses = srv.(*admin).accesses
-	}
+	accesses := srv.(*admin).accesses
 	if cannotProceed(*currentNameOfUser, methodWhichCall, accesses) {
 		return status.Errorf(codes.Unauthenticated, "authentication failed")
 	}
-	return err
+	return handler(srv, ss)
 }
 
 func cannotProceed(currentNameOfUser string, methodWhichCall string, accesses map[string][]string) bool {
@@ -156,8 +161,6 @@ func cannotProceed(currentNameOfUser string, methodWhichCall string, accesses ma
 	if exist {
 		for _, val := range methodAcceptable {
 			if val == methodWhichCall || (val[len(val)-1] == byte('*') && strings.Contains(methodWhichCall, val[:len(val)-2])) {
-				test := val[:len(val)-2]
-				fmt.Println(test)
 				return !exist
 			}
 		}

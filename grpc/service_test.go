@@ -138,35 +138,35 @@ func TestACL(t *testing.T) {
 	conn := getGrpcConn(t)
 	defer conn.Close()
 
-	// biz := NewBizClient(conn)
+	biz := NewBizClient(conn)
 	adm := NewAdminClient(conn)
 
-	// for idx, ctx := range []context.Context{
-	// 	context.Background(),       // нет поля для ACL
-	// 	getConsumerCtx("unknown"),  // поле есть, неизвестный консюмер
-	// 	getConsumerCtx("biz_user"), // поле есть, нет доступа
-	// } {
-	// 	_, err = biz.Test(ctx, &Nothing{})
-	// 	if err == nil {
-	// 		t.Fatalf("[%d] ACL fail: expected err on disallowed method", idx)
-	// 	} else if code := grpc.Code(err); code != codes.Unauthenticated {
-	// 		t.Fatalf("[%d] ACL fail: expected Unauthenticated code, got %v", idx, code)
-	// 	}
-	// }
+	for idx, ctx := range []context.Context{
+		context.Background(),       // нет поля для ACL
+		getConsumerCtx("unknown"),  // поле есть, неизвестный консюмер
+		getConsumerCtx("biz_user"), // поле есть, нет доступа
+	} {
+		_, err = biz.Test(ctx, &Nothing{})
+		if err == nil {
+			t.Fatalf("[%d] ACL fail: expected err on disallowed method", idx)
+		} else if code := grpc.Code(err); code != codes.Unauthenticated {
+			t.Fatalf("[%d] ACL fail: expected Unauthenticated code, got %v", idx, code)
+		}
+	}
 
-	// // есть доступ
-	// _, err = biz.Check(getConsumerCtx("biz_user"), &Nothing{})
-	// if err != nil {
-	// 	t.Fatalf("ACL fail: unexpected error: %v", err)
-	// }
-	// _, err = biz.Check(getConsumerCtx("biz_admin"), &Nothing{})
-	// if err != nil {
-	// 	t.Fatalf("ACL fail: unexpected error: %v", err)
-	// }
-	// _, err = biz.Test(getConsumerCtx("biz_admin"), &Nothing{})
-	// if err != nil {
-	// 	t.Fatalf("ACL fail: unexpected error: %v", err)
-	// }
+	// есть доступ
+	_, err = biz.Check(getConsumerCtx("biz_user"), &Nothing{})
+	if err != nil {
+		t.Fatalf("ACL fail: unexpected error: %v", err)
+	}
+	_, err = biz.Check(getConsumerCtx("biz_admin"), &Nothing{})
+	if err != nil {
+		t.Fatalf("ACL fail: unexpected error: %v", err)
+	}
+	_, err = biz.Test(getConsumerCtx("biz_admin"), &Nothing{})
+	if err != nil {
+		t.Fatalf("ACL fail: unexpected error: %v", err)
+	}
 
 	// ACL на методах, которые возвращают поток данных
 	logger, err := adm.Logging(getConsumerCtx("unknown"), &Nothing{})

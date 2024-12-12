@@ -10,6 +10,7 @@ import (
 	"strings"
 	"encoding/json"
 	"google.golang.org/grpc/codes"
+	"fmt"
 )
 
 func StartMyMicroservice(ctx context.Context, listenAddr string, ACLData string) (err error) {
@@ -62,9 +63,10 @@ func NewBiz(accesses map[string][]string, host string) *biz {
 }
 
 func (a *admin) Logging(in *Nothing, adminServer Admin_LoggingServer) (err error) {
-	out := &Event{Consumer: "logger2", Method: "/main.Admin/Logging", Host: strings.Split(a.host, ":")[0] + ":"}
-	err = adminServer.Send(out)
-	return
+	for {
+		out := &Event{Consumer: "logger2", Method: "/main.Admin/Logging", Host: strings.Split(a.host, ":")[0] + ":"}
+		err = adminServer.Send(out)
+	}
 }
 
 func (a *admin) Statistics(*StatInterval, Admin_StatisticsServer) (err error) {
@@ -118,12 +120,6 @@ func authInterceptor(
 			accesses = info.Server.(*biz).accesses
 		case (*admin):
 			accesses = info.Server.(*admin).accesses
-			// currentEvent := Event{
-			// 	Consumer: "logger2", 
-			// 	Method: "/main.Admin/Logging",
-			// 	Host: strings.Split(info.Server.(*admin).host, ":")[0] + ":",
-			// }
-			// info.Server.(*admin).log = append(info.Server.(*admin).log, currentEvent)
 	}
 	if cannotProceed(*currentNameOfUser, methodWhichCall, accesses) {
 		return nil, status.Errorf(codes.Unauthenticated, "authentication failed")

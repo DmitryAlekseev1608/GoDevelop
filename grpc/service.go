@@ -2,15 +2,15 @@ package main
 
 import (
 	"context"
-	"net"
+	"encoding/json"
+	"fmt"
 	"log"
+	"net"
+	"strings"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
-	"strings"
-	"encoding/json"
-	"google.golang.org/grpc/codes"
-	"fmt"
 )
 
 func StartMyMicroservice(ctx context.Context, listenAddr string, ACLData string) (err error) {
@@ -25,8 +25,9 @@ func StartMyMicroservice(ctx context.Context, listenAddr string, ACLData string)
 			grpc.UnaryInterceptor(authInterceptor),
 			grpc.StreamInterceptor(streamInterceptor),
 		)
-		RegisterAdminServer(server, NewAdmin(accesses, listenAddr))
-		RegisterBizServer(server, NewBiz(accesses, listenAddr))
+		event := &[]*Event{}
+		RegisterAdminServer(server, NewAdmin(event, accesses, listenAddr))
+		RegisterBizServer(server, NewBiz(event, accesses, listenAddr))
 		go func() {
 			defer server.GracefulStop()
 			go server.Serve(lis)
@@ -37,26 +38,28 @@ func StartMyMicroservice(ctx context.Context, listenAddr string, ACLData string)
 }
 
 type admin struct {
-	log []Event
+	log *[]*Event
 	host string
 	accesses map[string][]string
 }
 
-func NewAdmin(accesses map[string][]string, host string) *admin {
+func NewAdmin(event *[]*Event, accesses map[string][]string, host string) *admin {
 	return &admin{
-		log: []Event{},
+		log: event,
 		host: host,
 		accesses: accesses,
 	}
 }
 
 type biz struct {
+	log *[]*Event
 	host string
 	accesses map[string][]string
 }
 
-func NewBiz(accesses map[string][]string, host string) *biz {
+func NewBiz(event *[]*Event, accesses map[string][]string, host string) *biz {
 	return &biz{
+		log: event,
 		host: host,
 		accesses: accesses,
 	}
@@ -64,8 +67,21 @@ func NewBiz(accesses map[string][]string, host string) *biz {
 
 func (a *admin) Logging(in *Nothing, adminServer Admin_LoggingServer) (err error) {
 	for {
-		out := &Event{Consumer: "logger2", Method: "/main.Admin/Logging", Host: strings.Split(a.host, ":")[0] + ":"}
-		err = adminServer.Send(out)
+		if len(*a.log) > 0 {
+			out := (*a.log)[0]
+			*a.log = append((*a.log)[:0], (*a.log)[(len(*a.log)):]...)
+			out = &Event{Consumer: out.Consumer, Method: out.Method, Host: out.Host}
+			err = adminServer.Send(out)
+			if err != nil {
+				return
+			}
+			select {
+				case <-adminServer.Context().Done():
+					return nil
+				default:
+					continue
+			}
+		}
 	}
 }
 
@@ -85,11 +101,29 @@ func (b *biz) Add(context.Context, *Nothing) (out *Nothing, err error) {
 
 func (b *biz) Test(ctx context.Context, in *Nothing) (out *Nothing, err error) {
 	out = &Nothing{}
-	return 
+	metadata, ok := metadata.FromIncomingContext(ctx)
+	if !ok {
+		return
+	}
+	currentNameOfUser := metadata["consumer"][0]
+	currentNameOfMethod, _ := grpc.Method(ctx)
+	addr := strings.Split(b.host, ":")[0] + ":"
+	event := &Event{Consumer: currentNameOfUser, Method: currentNameOfMethod, Host: addr}
+	*b.log = append(*b.log, event)
+	return
 }
 
 func (b *biz) Check(ctx context.Context, in *Nothing) (out *Nothing, err error) {
 	out = &Nothing{}
+	metadata, ok := metadata.FromIncomingContext(ctx)
+	if !ok {
+		return
+	}
+	currentNameOfUser := metadata["consumer"][0]
+	currentNameOfMethod, _ := grpc.Method(ctx)
+	addr := strings.Split(b.host, ":")[0] + ":"
+	event := &Event{Consumer: currentNameOfUser, Method: currentNameOfMethod, Host: addr}
+	*b.log = append(*b.log, event)
 	return
 }
 
@@ -181,6 +215,7 @@ func createMapFromACLData(ACLData string) (accesses map[string][]string, err err
 	if err != nil {
 		log.Printf("Ошибка при парсинге ACLData: %v", err)
 	}
+	fmt.Println()
 	return
 }
 

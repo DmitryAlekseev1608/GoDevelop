@@ -66,6 +66,17 @@ func NewBiz(event *[]*Event, accesses map[string][]string, host string) *biz {
 }
 
 func (a *admin) Logging(in *Nothing, adminServer Admin_LoggingServer) (err error) {
+	// out = &Nothing{}
+	// metadata, ok := metadata.FromIncomingContext(ctx)
+	// if !ok {
+	// 	return
+	// }
+	// currentNameOfUser := metadata["consumer"][0]
+	currentNameOfMethod := *adminServer.method()
+	addr := strings.Split(a.host, ":")[0] + ":"
+	fmt.Println(addr)
+	// event := &Event{Consumer: currentNameOfUser, Method: currentNameOfMethod, Host: addr}
+	// *b.log = append(*b.log, event)
 	for {
 		if len(*a.log) > 0 {
 			out := (*a.log)[0]

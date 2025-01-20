@@ -7,6 +7,8 @@ import (
 	"log"
 	"net"
 	"strings"
+	"time"
+
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -17,7 +19,7 @@ func StartMyMicroservice(ctx context.Context, listenAddr string, ACLData string)
 	accesses, err := createMapFromACLData(ACLData)
 	if err == nil {
 		port := strings.Split(listenAddr, ":")[1]
-		lis, err := net.Listen("tcp", ":" + port)
+		lis, err := net.Listen("tcp", ":"+port)
 		if err != nil {
 			log.Fatalln("can't listet port", err)
 		}
@@ -31,73 +33,117 @@ func StartMyMicroservice(ctx context.Context, listenAddr string, ACLData string)
 		go func() {
 			defer server.GracefulStop()
 			go server.Serve(lis)
-			<- ctx.Done()
-			}()
-		}
+			<-ctx.Done()
+		}()
+	}
 	return
 }
 
 type admin struct {
-	log *[]*Event
-	host string
+	log      *[]*Event
+	host     string
 	accesses map[string][]string
 }
 
 func NewAdmin(event *[]*Event, accesses map[string][]string, host string) *admin {
 	return &admin{
-		log: event,
-		host: host,
+		log:      event,
+		host:     host,
 		accesses: accesses,
 	}
 }
 
 type biz struct {
-	log *[]*Event
-	host string
+	log      *[]*Event
+	host     string
 	accesses map[string][]string
 }
 
 func NewBiz(event *[]*Event, accesses map[string][]string, host string) *biz {
 	return &biz{
-		log: event,
-		host: host,
+		log:      event,
+		host:     host,
 		accesses: accesses,
 	}
 }
 
 func (a *admin) Logging(in *Nothing, adminServer Admin_LoggingServer) (err error) {
-	// out = &Nothing{}
-	// metadata, ok := metadata.FromIncomingContext(ctx)
-	// if !ok {
-	// 	return
-	// }
-	// currentNameOfUser := metadata["consumer"][0]
-	currentNameOfMethod := *adminServer.method()
+	logs := []*Event{}
+	counter := len(*a.log)
+	ctx := adminServer.Context()
+	metadata, _ := metadata.FromIncomingContext(ctx)
+	currentNameOfUser := metadata["consumer"][0]
+	currentNameOfMethod := "/main.Admin/Logging"
 	addr := strings.Split(a.host, ":")[0] + ":"
-	fmt.Println(addr)
-	// event := &Event{Consumer: currentNameOfUser, Method: currentNameOfMethod, Host: addr}
-	// *b.log = append(*b.log, event)
+	event := &Event{Consumer: currentNameOfUser, Method: currentNameOfMethod, Host: addr}
+	*a.log = append(*a.log, event)
 	for {
-		if len(*a.log) > 0 {
-			out := (*a.log)[0]
-			*a.log = append((*a.log)[:0], (*a.log)[(len(*a.log)):]...)
+		logs = append(logs, (*a.log)[counter:]...)
+		counter += len(logs)
+		for idx, v := range logs {
+			if v.Consumer == currentNameOfUser && v.Method == "/main.Admin/Logging" {
+				logs = append(logs[:idx], logs[idx+1:]...)
+			}
+		}
+		for len(logs) > 0 {
+			out := (logs)[0]
+			logs = append((logs)[:0], (logs)[(len(logs)):]...)
 			out = &Event{Consumer: out.Consumer, Method: out.Method, Host: out.Host}
 			err = adminServer.Send(out)
 			if err != nil {
 				return
 			}
 			select {
-				case <-adminServer.Context().Done():
-					return nil
-				default:
-					continue
+			case <-adminServer.Context().Done():
+				return nil
+			default:
+				continue
 			}
 		}
 	}
 }
 
-func (a *admin) Statistics(*StatInterval, Admin_StatisticsServer) (err error) {
-	return
+func (a *admin) Statistics(statInterval *StatInterval, adminStatisticsServer Admin_StatisticsServer) (err error) {
+	byMethod := map[string]uint64{}
+	byConsumer := map[string]uint64{}
+	logs := []*Event{}
+	counter := len(*a.log)
+	ctx := adminStatisticsServer.Context()
+	metadata, _ := metadata.FromIncomingContext(ctx)
+	currentNameOfUser := metadata["consumer"][0]
+	currentNameOfMethod := "/main.Admin/Statistics"
+	addr := strings.Split(a.host, ":")[0] + ":"
+	event := &Event{Consumer: currentNameOfUser, Method: currentNameOfMethod, Host: addr}
+	*a.log = append(*a.log, event)
+	for {
+		logs = append(logs, (*a.log)[counter:]...)
+		counter += len(logs)
+		for idx, v := range logs {
+			if v.Consumer == currentNameOfUser && v.Method == "/main.Admin/Statistics" {
+				logs = append(logs[:idx], logs[idx+1:]...)
+			}
+		}
+		for _, v := range logs {
+			byMethod[v.Method] += 1
+			byConsumer[v.Consumer] += 1
+		}
+		logs = []*Event{}
+		stat := &Stat{
+			ByMethod: byMethod,
+			ByConsumer: byConsumer,
+		}
+		err = adminStatisticsServer.Send(stat)
+		if err != nil {
+			return
+		}
+		select {
+		case <-adminStatisticsServer.Context().Done():
+			return nil
+		default:
+			continue
+		}
+		time.Sleep(time.Duration(statInterval.IntervalSeconds) * time.Second)
+	}
 }
 
 func (a *admin) mustEmbedUnimplementedAdminServer() {
@@ -160,11 +206,11 @@ func authInterceptor(
 		return nil, status.Errorf(codes.Unauthenticated, "method is out in call")
 	}
 	accesses := make(map[string][]string)
-	switch  info.Server.(type) {
-		case (*biz):
-			accesses = info.Server.(*biz).accesses
-		case (*admin):
-			accesses = info.Server.(*admin).accesses
+	switch info.Server.(type) {
+	case (*biz):
+		accesses = info.Server.(*biz).accesses
+	case (*admin):
+		accesses = info.Server.(*admin).accesses
 	}
 	if cannotProceed(*currentNameOfUser, methodWhichCall, accesses) {
 		return nil, status.Errorf(codes.Unauthenticated, "authentication failed")

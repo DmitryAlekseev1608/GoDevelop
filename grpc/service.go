@@ -7,7 +7,6 @@ import (
 	"log"
 	"net"
 	"strings"
-	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -106,7 +105,6 @@ func (a *admin) Logging(in *Nothing, adminServer Admin_LoggingServer) (err error
 func (a *admin) Statistics(statInterval *StatInterval, adminStatisticsServer Admin_StatisticsServer) (err error) {
 	byMethod := map[string]uint64{}
 	byConsumer := map[string]uint64{}
-	logs := []*Event{}
 	counter := len(*a.log)
 	ctx := adminStatisticsServer.Context()
 	metadata, _ := metadata.FromIncomingContext(ctx)
@@ -116,7 +114,7 @@ func (a *admin) Statistics(statInterval *StatInterval, adminStatisticsServer Adm
 	event := &Event{Consumer: currentNameOfUser, Method: currentNameOfMethod, Host: addr}
 	*a.log = append(*a.log, event)
 	for {
-		logs = append(logs, (*a.log)[counter:]...)
+		logs := (*a.log)[counter:]
 		counter += len(logs)
 		for idx, v := range logs {
 			if v.Consumer == currentNameOfUser && v.Method == "/main.Admin/Statistics" {
@@ -127,14 +125,15 @@ func (a *admin) Statistics(statInterval *StatInterval, adminStatisticsServer Adm
 			byMethod[v.Method] += 1
 			byConsumer[v.Consumer] += 1
 		}
-		logs = []*Event{}
 		stat := &Stat{
 			ByMethod: byMethod,
 			ByConsumer: byConsumer,
 		}
-		err = adminStatisticsServer.Send(stat)
-		if err != nil {
-			return
+		if len(stat.ByMethod) != 0 || len(stat.ByConsumer) != 0 {
+			err = adminStatisticsServer.Send(stat)
+			if err != nil {
+				return
+			}
 		}
 		select {
 		case <-adminStatisticsServer.Context().Done():
@@ -142,7 +141,6 @@ func (a *admin) Statistics(statInterval *StatInterval, adminStatisticsServer Adm
 		default:
 			continue
 		}
-		time.Sleep(time.Duration(statInterval.IntervalSeconds) * time.Second)
 	}
 }
 
@@ -152,7 +150,17 @@ func (a *admin) mustEmbedUnimplementedAdminServer() {
 func (b *biz) Logging() {
 }
 
-func (b *biz) Add(context.Context, *Nothing) (out *Nothing, err error) {
+func (b *biz) Add(ctx context.Context, in *Nothing) (out *Nothing, err error) {
+	out = &Nothing{}
+	metadata, ok := metadata.FromIncomingContext(ctx)
+	if !ok {
+		return
+	}
+	currentNameOfUser := metadata["consumer"][0]
+	currentNameOfMethod, _ := grpc.Method(ctx)
+	addr := strings.Split(b.host, ":")[0] + ":"
+	event := &Event{Consumer: currentNameOfUser, Method: currentNameOfMethod, Host: addr}
+	*b.log = append(*b.log, event)
 	return
 }
 
